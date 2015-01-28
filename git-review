@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+
+begin
+  require 'ruby-progressbar'
+rescue LoadError => e
+  system 'gem', 'install', 'ruby-progressbar'
+  require 'ruby-progressbar'
+end
+
+def determine_current_branch
+  gitflow_prefix = `git config gitflow.prefix.feature | sed 's!\/!\\\/!'`.chomp
+  branch = `git branch | grep '^*' | sed 's!\*\ !!'`.chomp
+
+  branch.gsub(gitflow_prefix, '')
+end
+
+feature = ARGV[0] || determine_current_branch
+base = ARGV[1] || 'develop..'
+base_branch = base.gsub(/\.+$/, '')
+
+puts "preparing to review feature/#{feature}"
+
+$stdout.sync = true
+if feature != determine_current_branch
+  system *%W[git checkout #{base_branch}]
+  system *%w[git pull --rebase]
+  system *%w[git flow feature track], feature
+end
+
+puts "start review now?"
+answer = STDIN.gets.chomp
+
+commits = `git log --reverse --format=format:%H #{base}`.split($/)
+commit_hash = 'commit 0000000000000000000000000000000000000000'
+progressbar = ProgressBar.create(
+  format: commit_hash + ' %a |%w>%i| %c/%C ',
+  total: commits.size,
+  starting_at: 0
+)
+
+commits.each do |commit|
+  system "clear"
+  progressbar.increment
+  system "git", "show", "--patch-with-stat", commit
+  answer = STDIN.gets.chomp
+end
+
+puts "clean up review?"
+answer = STDIN.gets.chomp
+
+system "git", "checkout", "develop"
+system "git branch -d feature/#{feature}"
