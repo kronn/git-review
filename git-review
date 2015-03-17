@@ -4,7 +4,7 @@ begin
   require 'ruby-progressbar'
 rescue LoadError => e
   system 'gem', 'install', 'ruby-progressbar'
-  require 'ruby-progressbar'
+  exec "#{$0} #{ARGV.join(' ')}"
 end
 
 def determine_current_branch
