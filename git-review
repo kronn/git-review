@@ -1,52 +1,109 @@
 #!/usr/bin/env ruby
 
+# rubocop:disable Style/SpecialGlobalVars
+
 begin
   require 'ruby-progressbar'
-rescue LoadError => e
+rescue LoadError
   system 'gem', 'install', 'ruby-progressbar'
   exec "#{$0} #{ARGV.join(' ')}"
 end
 
 def determine_current_branch
-  gitflow_prefix = `git config gitflow.prefix.feature | sed 's!\/!\\\/!'`.chomp
   branch = `git branch | grep '^*' | sed 's!\*\ !!'`.chomp
 
-  branch.gsub(gitflow_prefix, '')
+  if just_pulled? && branch == 'master'
+    # format "branch" like base..HEAD
+    `git reflog -1 --parents | cut -d ' ' -f 1,2`.chomp.split.reverse.join('..')
+  elsif git_flow?
+    prefix = `git config gitflow.prefix.feature | sed 's!\/!\\\/!'`.chomp
+
+    branch.gsub(prefix, '')
+  else
+    branch
+  end
 end
+
+def integration_branch
+  @integration_branch ||=
+    begin
+      if git_flow?
+        `git config gitflow.branch.develop`.chomp
+      else
+        'master'
+      end
+    end
+end
+
+def git_flow?
+  @git_flow ||= begin
+                  `git config --get gitflow.branch.develop`
+                  $?.success?
+                end
+end
+
+def just_pulled?
+  `git reflog -1 | grep 'pull'`
+  $?.success?
+end
+
+ENV['PAGER'] ||= "#{`which less`.chomp} -E"
 
 feature = ARGV[0] || determine_current_branch
-base = ARGV[1] || 'develop..'
-base_branch = base.gsub(/\.+$/, '')
+base = ARGV[1] || integration_branch
 
-puts "preparing to review feature/#{feature}"
+if feature =~ /(?<base>[0-9a-f]{5,8})\.{2}(?<branch>[0-9a-f]{5,8})/
+  range_given  = true
+  full_branch  = feature # used for message
+  commit_range = feature
 
-$stdout.sync = true
-if feature != determine_current_branch
-  system *%W[git checkout #{base_branch}]
-  system *%w[git pull --rebase]
-  system *%w[git flow feature track], feature
+  matches      = $~
+  feature      = matches[:branch]
+  base         = matches[:base]
+else
+  range_given  = false
+  full_branch  = git_flow? ? "feature/#{feature}" : feature
+  commit_range = "#{base}..#{full_branch}"
 end
 
-puts "start review now?"
+puts "preparing to review #{full_branch}"
+
+$stdout.sync = true
+if git_flow? && !range_given && feature != determine_current_branch
+  base_branch = base.gsub(/\.+$/, '')
+
+  system('git', 'checkout', base_branch)
+  system('git', 'pull', '--rebase')
+  system('git', 'flow', 'feature', 'track', feature)
+end
+
+system('git', 'log', '--graph', '--oneline', '--decorate', commit_range)
+puts
+
+puts 'start review now?'
 answer = STDIN.gets.chomp
 
-commits = `git log --reverse --format=format:%H #{base}`.split($/)
+commits = `git log --reverse --format=format:%H #{commit_range}`.split
 commit_hash = 'commit 0000000000000000000000000000000000000000'
 progressbar = ProgressBar.create(
-  format: commit_hash + ' %a |%w>%i| %c/%C ',
+  format: commit_hash + ' %a |%w>%i| %c/%C | %E ',
   total: commits.size,
   starting_at: 0
 )
 
 commits.each do |commit|
-  system "clear"
+  system 'clear'
   progressbar.increment
-  system "git", "show", "--patch-with-stat", commit
+  system 'git', 'show', '--patch-with-stat', commit
   answer = STDIN.gets.chomp
 end
 
-puts "clean up review?"
-answer = STDIN.gets.chomp
+if git_flow? && !range_given && !just_pulled?
+  puts 'clean up review?'
+  answer = STDIN.gets.chomp
 
-system "git", "checkout", "develop"
-system "git branch -d feature/#{feature}"
+  system 'git', 'checkout', integration_branch
+  system "git branch -d feature/#{feature}"
+end
+
+# rubocop:enable Style/SpecialGlobalVars
